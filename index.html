@@ -1,0 +1,1202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GraphRAG 知识图谱可视化</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0a0f1a; color: #e6edf3;
+            height: 100vh; overflow: hidden;
+        }
+        .container { display: flex; height: 100vh; }
+
+        .sidebar {
+            width: 300px; background: rgba(16,22,30,0.95); border-right: 1px solid #21262d;
+            display: flex; flex-direction: column; padding: 18px; z-index: 10;
+            backdrop-filter: blur(12px);
+        }
+        .logo { font-size: 15px; font-weight: 700; color: #f0883e; margin-bottom: 2px; }
+        .subtitle { font-size: 11px; color: #6e7681; margin-bottom: 16px; }
+
+        .search-box { margin-bottom: 12px; }
+        .search-wrapper { display: flex; gap: 7px; }
+        .search-input {
+            flex: 1; background: #0d1117; border: 1px solid #30363d;
+            border-radius: 6px; padding: 9px 11px; color: #e6edf3;
+            font-size: 13px; outline: none; transition: border-color 0.2s;
+        }
+        .search-input:focus { border-color: #f0883e; box-shadow: 0 0 0 3px rgba(240,136,62,0.15); }
+        .search-btn {
+            background: linear-gradient(135deg, #da3633, #f85149); border: none; border-radius: 6px;
+            padding: 9px 14px; color: white; font-size: 12px;
+            cursor: pointer; font-weight: 600; transition: all 0.2s;
+        }
+        .search-btn:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(248,81,73,0.35); }
+
+        .actions { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+        .action-btn {
+            background: #21262d; border: 1px solid #30363d; border-radius: 6px;
+            padding: 5px 10px; color: #8b949e; font-size: 11px; cursor: pointer;
+            transition: all 0.15s;
+        }
+        .action-btn:hover { background: #30363d; color: #c9d1d9; }
+
+        .matches-section { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+        .section-title {
+            font-size: 11px; font-weight: 600; color: #6e7681;
+            margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.4px;
+        }
+        .matches-list { flex: 1; overflow-y: auto; }
+        .matches-list::-webkit-scrollbar { width: 4px; }
+        .matches-list::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+        .match-item {
+            background: #0d1117; border: 1px solid #21262d; border-left: 3px solid #30363d;
+            border-radius: 6px; padding: 9px 10px; margin-bottom: 5px;
+            display: flex; align-items: center; gap: 9px;
+            cursor: pointer; transition: all 0.2s ease;
+            position: relative; overflow: hidden;
+        }
+        .match-item::before {
+            content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+            background: inherit; opacity: 0; transition: opacity 0.3s;
+        }
+        .match-item:hover::before { opacity: 1; }
+        .match-item:hover { background: rgba(22,27,34,0.95); transform: translateX(3px); }
+        .match-item.highlighted { border-left-color: #f0883e; background: rgba(240,136,62,0.06); }
+        .match-item.revealing { animation: itemPulse 0.6s ease-out; }
+        @keyframes itemPulse {
+            0% { background: rgba(240,136,62,0.25); transform: scale(1.02); }
+            100% { background: rgba(240,136,62,0.06); transform: scale(1); }
+        }
+
+        .match-score {
+            width: 32px; height: 32px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 10px; font-weight: 700; color: white; flex-shrink: 0;
+            transition: transform 0.2s;
+        }
+        .match-item:hover .match-score { transform: scale(1.1); }
+        .match-info { flex: 1; min-width: 0; }
+        .match-name {
+            font-size: 11px; color: #e6edf3;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .match-desc { font-size: 9px; color: #6e7681; margin-top: 2px; }
+        .empty-matches {
+            text-align: center; color: #484f58;
+            padding: 24px 14px; font-size: 11px; line-height: 1.7;
+        }
+
+        .stats {
+            display: grid; grid-template-columns: repeat(3,1fr); gap: 6px;
+            margin: 10px 0; padding-top: 10px; border-top: 1px solid #21262d;
+        }
+        .stat-item { text-align: center; }
+        .stat-value { font-size: 17px; font-weight: 700; color: #58a6ff; }
+        .stat-label { font-size: 9px; color: #484f58; }
+
+        /* 热力状态指示器 */
+        .ripple-status {
+            background: rgba(22,27,34,0.92); border: 1px solid #30363d;
+            border-radius: 6px; padding: 8px 12px; margin-bottom: 10px;
+            font-size: 10px; color: #6e7681; display: none;
+            align-items: center; gap: 8px;
+        }
+        .ripple-status.active { display: flex; }
+        .ripple-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #f0883e; animation: rippleDotPulse 1s infinite;
+        }
+        .ripple-progress { flex: 1; height: 3px; background: #21262d; border-radius: 2px; overflow: hidden; }
+        .ripple-bar { height: 100%; background: linear-gradient(90deg, #f0883e, #58a6ff); width: 0%; transition: width 0.3s; }
+        @keyframes rippleDotPulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.7); }
+        }
+
+        .config-section { margin-top: auto; padding-top: 10px; }
+        .config-toggle {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 8px 0; cursor: pointer; color: #6e7681; font-size: 11px;
+            border-top: 1px solid #21262d;
+        }
+        .config-content { display: none; }
+        .config-content.open { display: block; margin-top: 8px; }
+        .config-row { margin-bottom: 7px; }
+        .config-label { font-size: 9px; color: #484f58; margin-bottom: 2px; }
+        .config-input {
+            width: 100%; background: #0d1117; border: 1px solid #30363d;
+            border-radius: 4px; padding: 6px 9px; color: #e6edf3; font-size: 11px;
+        }
+        .config-btn {
+            width: 100%; background: #21262d; border: 1px solid #30363d;
+            border-radius: 4px; padding: 7px; color: #58a6ff; font-size: 10px;
+            cursor: pointer; margin-top: 6px;
+        }
+        .config-btn:hover { background: #30363d; }
+
+        .main-content { flex: 1; position: relative; background: radial-gradient(ellipse at center, #080d1a 0%, #030610 70%); }
+        #graph-container { width: 100%; height: 100%; }
+
+        .legend {
+            position: absolute; right: 20px; top: 16px;
+            background: rgba(13,17,23,0.93); border: 1px solid #21262d;
+            border-radius: 8px; padding: 12px 14px; font-size: 11px; z-index: 10;
+            backdrop-filter: blur(8px);
+        }
+        .legend-title {
+            font-weight: 700; color: #8b949e; margin-bottom: 8px;
+            font-size: 10px; text-transform: uppercase; letter-spacing: 0.3px;
+        }
+        .legend-item { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+        .legend-dot { width: 13px; height: 13px; border-radius: 50%; }
+        .legend-label { color: #e6edf3; font-size: 11px; }
+        .legend-divider { height: 1px; background: #21262d; margin: 8px 0; }
+
+        .hint {
+            position: absolute; left: 18px; bottom: 16px;
+            background: rgba(13,17,23,0.88); border: 1px solid #21262d;
+            border-radius: 6px; padding: 8px 12px; font-size: 10px;
+            color: #6e7681; z-index: 10;
+        }
+
+        .toast {
+            position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+            background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+            padding: 10px 20px; color: #e6edf3; font-size: 12px;
+            opacity: 0; visibility: hidden; transition: all 0.25s; z-index: 1000;
+        }
+        .toast.show { opacity: 1; visibility: visible; }
+
+        .loading-overlay {
+            position: absolute; inset: 0; background: rgba(10,15,26,0.97);
+            display: flex; align-items: center; justify-content: center;
+            opacity: 0; visibility: hidden; transition: all 0.25s; z-index: 100;
+        }
+        .loading-overlay.show { opacity: 1; visibility: visible; }
+        .loading-spinner {
+            width: 38px; height: 38px; border: 3px solid #21262d;
+            border-top-color: #f0883e; border-radius: 50%; animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .loading-text { margin-top: 12px; color: #6e7681; font-size: 11px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <div class="logo">🔍 GraphRAG Visualizer</div>
+            <div class="subtitle">知识图谱检索可视化 · 星空蔓延</div>
+
+            <!-- 热力蔓延状态 -->
+            <div id="ripple-status" class="ripple-status">
+                <div class="ripple-dot"></div>
+                <span id="ripple-text">星空蔓延中...</span>
+                <div class="ripple-progress"><div class="ripple-bar" id="ripple-bar"></div></div>
+            </div>
+
+            <div class="search-box">
+                <div class="search-wrapper">
+                    <input type="text" id="search-input" class="search-input"
+                           placeholder="输入关键词检索..."
+                           onkeydown="if(event.key==='Enter') doSearch()">
+                    <button class="search-btn" onclick="doSearch()">搜索</button>
+                </div>
+            </div>
+
+            <div class="actions">
+                <button class="action-btn" onclick="clearHighlight()">清除高亮</button>
+                <button class="action-btn" onclick="resetView()">重置视图</button>
+                <button class="action-btn" onclick="runDiagnose()">诊断</button>
+            </div>
+
+            <div class="matches-section">
+                <div class="section-title">匹配结果</div>
+                <div id="matches-list" class="matches-list">
+                    <div class="empty-matches">输入关键词开始检索<br>✨ 匹配结果将以星空蔓延动画展示</div>
+                </div>
+            </div>
+
+            <div class="stats">
+                <div class="stat-item"><div id="stat-nodes" class="stat-value">0</div><div class="stat-label">节点</div></div>
+                <div class="stat-item"><div id="stat-edges" class="stat-value">0</div><div class="stat-label">边</div></div>
+                <div class="stat-item"><div id="stat-matched" class="stat-value">0</div><div class="stat-label">匹配</div></div>
+            </div>
+
+            <div class="config-section">
+                <div class="config-toggle" onclick="toggleConfig()">
+                    <span>⚙ Neo4j 连接配置</span><span id="config-arrow">▼</span>
+                </div>
+                <div id="config-content" class="config-content">
+                    <div class="config-row"><div class="config-label">URI</div>
+                        <input type="text" id="neo4j-uri" class="config-input" value="bolt://localhost:7687"></div>
+                    <div class="config-row"><div class="config-label">用户名</div>
+                        <input type="text" id="neo4j-user" class="config-input" value="neo4j"></div>
+                    <div class="config-row"><div class="config-label">密码</div>
+                        <input type="password" id="neo4j-password" class="config-input" placeholder="输入密码"></div>
+                    <button class="config-btn" onclick="saveNeo4jConfig()">保存并连接</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <div id="graph-container"></div>
+
+            <div class="legend">
+                <div class="legend-title">节点类型</div>
+                <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div><div class="legend-label">Root</div></div>
+                <div class="legend-item"><div class="legend-dot" style="background:#10b981"></div><div class="legend-label">Abstract</div></div>
+                <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div><div class="legend-label">SubAbstract</div></div>
+                <div class="legend-item"><div class="legend-dot" style="background:#a78bfa"></div><div class="legend-label">Fact</div></div>
+                <div class="legend-divider"></div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background:#fff;border:2px solid #fff;box-shadow:0 0 12px rgba(255,255,255,0.9)"></div>
+                    <div class="legend-label">核心热点</div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background:#fbbf24;border:2px solid #f59e0b;box-shadow:0 0 8px rgba(251,191,36,0.6)"></div>
+                    <div class="legend-label">强关联</div>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-dot" style="background:#60a5fa;border:2px solid #3b82f6;box-shadow:0 0 5px rgba(96,165,250,0.4)"></div>
+                    <div class="legend-label">弱关联</div>
+                </div>
+            </div>
+
+            <div class="hint">✨ 星空蔓延 · 滚轮缩放 · 拖动平移 · 点击查看详情</div>
+
+            <div id="loading" class="loading-overlay">
+                <div style="text-align:center">
+                    <div class="loading-spinner"></div>
+                    <div id="loading-text" class="loading-text">加载中...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+<script>
+var API_BASE = window.location.origin;
+var chart = null;
+var currentNodes = [];
+var currentEdges = [];
+var nodeIdMap = {};
+var DEFAULT_ZOOM = 0.55;
+var layoutFrozen = false;
+var currentMatches = null;
+
+// 星空背景配置：从未匹配节点中随机采样多少颗作为背景星
+var STAR_BG_COUNT = 500;    // 大幅增加，营造密集星空效果
+
+// 搜索模式下的坐标布局范围
+var CLUSTER_RADIUS = 700;   // 匹配节点分散半径（增大，避免粘在一起）
+var BG_SPREAD = 1800;       // 背景星扩散半径（更大范围，覆盖整个视野）
+
+// 节点层级权重（用于蔓延顺序）
+var LAYER_WEIGHT = {
+    'Root':         0,
+    'Abstract':     1,
+    'SubAbstract':  2,
+    'Fact':         3
+};
+
+var TYPE_COLORS = {
+    'Root':         '#ef4444',
+    'Abstract':     '#10b981',
+    'SubAbstract':  '#3b82f6',
+    'Fact':         '#a78bfa'
+};
+
+// 热力颜色：根据分数返回渐变色（红→橙→黄→蓝）
+function getHeatColor(score) {
+    if (score >= 0.85) return '#ffffff';       // 核心白热
+    if (score >= 0.75) return '#fbbf24';       // 金黄
+    if (score >= 0.60) return '#f59e0b';       // 橙色
+    if (score >= 0.45) return '#60a5fa';       // 天蓝
+    return '#6366f1';                           // 淡紫
+}
+
+function getHeatGlow(score) {
+    if (score >= 0.85) return { blur: 40, color: 'rgba(255,255,255,0.95)', border: 5 };
+    if (score >= 0.75) return { blur: 30, color: 'rgba(251,191,36,0.8)',  border: 4 };
+    if (score >= 0.60) return { blur: 22, color: 'rgba(245,158,11,0.7)',  border: 3 };
+    if (score >= 0.45) return { blur: 15, color: 'rgba(96,165,250,0.5)',  border: 2 };
+    return { blur: 8,  color: 'rgba(99,102,241,0.3)',   border: 1 };
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    initChart();
+    loadGraphData();
+});
+
+function initChart() {
+    chart = echarts.init(document.getElementById('graph-container'), null, {
+        renderer: 'canvas',
+        backgroundColor: 'transparent'
+    });
+    window.addEventListener('resize', function() { chart.resize(); });
+}
+
+function getTypeColor(cats) {
+    if (!cats || !cats.length) return '#4b5563';
+    return TYPE_COLORS[cats[0]] || '#4b5563';
+}
+
+function getLayerWeight(nodeId) {
+    var n = currentNodes[nodeIdMap[nodeId]];
+    if (!n) return 99;
+    return LAYER_WEIGHT[(n.categories||[])[0]] || 3;
+}
+
+function truncate(s, n) {
+    if (!s) return '';
+    return s.length > n ? s.substring(0, n) + '\u2026' : s;
+}
+
+async function loadGraphData() {
+    showLoading(true, '加载知识图谱...');
+    try {
+        var res = await fetch(API_BASE + '/api/graph/full?node_limit=3000&edge_limit=8000');
+        if (!res.ok) throw new Error((await res.json()).detail || '加载失败');
+        var data = await res.json();
+
+        if (!data.nodes || !data.nodes.length) {
+            showLoading(false);
+            showToast('图谱为空', true); return;
+        }
+
+        currentNodes = data.nodes;
+        currentEdges = data.edges;
+
+        nodeIdMap = {};
+        currentNodes.forEach(function(n, i) { nodeIdMap[n.id] = i; });
+
+        document.getElementById('stat-nodes').textContent = currentNodes.length;
+        document.getElementById('stat-edges').textContent = currentEdges.length;
+
+        renderForceLayout();
+        showLoading(false);
+        showToast('加载完成: ' + currentNodes.length + ' 节点');
+
+        setTimeout(function() { freezeLayout(0); }, 5000);
+
+    } catch (err) {
+        showLoading(false);
+        showToast('加载失败: ' + err.message, true);
+        console.error(err);
+    }
+}
+
+/* ==================== 力布局渲染 ==================== */
+
+function renderForceLayout() {
+    layoutFrozen = false;
+    var graphNodes = currentNodes.map(function(n) {
+        var cats = n.categories || [];
+        var baseColor = getTypeColor(cats);
+        return {
+            id: n.id, name: n.name || '',
+            symbolSize: 18, category: cats[0] || '',
+            itemStyle: { color: baseColor, opacity: 0.55 },
+            label: { show: true, formatter: truncate(n.name, 12), fontSize: 8, color: '#6b7280', position: 'bottom', distance: 4 },
+            emphasis: { scale: 2, itemStyle: { shadowBlur: 25, shadowColor: 'rgba(255,255,255,0.8)', borderWidth: 3, borderColor: '#ffffff' } },
+            _orig: n
+        };
+    });
+
+    var graphEdges = currentEdges.map(function(e) {
+        return { source: e.source, target: e.target, lineStyle: { color: 'rgba(100,116,139,0.2)', width: 0.5 } };
+    });
+
+    var option = {
+        backgroundColor: 'transparent',
+        tooltip: { trigger: 'item', confine: true, enterable: false,
+            formatter: tooltipFormatter },
+        series: [{
+            type: 'graph', layout: 'force',
+            animation: false, data: graphNodes, links: graphEdges,
+            roam: true, draggable: false,
+            scaleLimit: { min: 0.05, max: 10 }, zoom: DEFAULT_ZOOM,
+            force: { repulsion: 800, edgeLength: [150, 350], gravity: 0.05, friction: 0.6, layoutAnimation: true },
+            focusNodeAdjacency: false,
+            emphasis: { focus: 'none' },
+            categories: [
+                { name: 'Root', itemStyle: { color: '#ef4444' } },
+                { name: 'Abstract', itemStyle: { color: '#10b981' } },
+                { name: 'SubAbstract', itemStyle: { color: '#3b82f6' } },
+                { name: 'Fact', itemStyle: { color: '#a78bfa' } }
+            ]
+        }]
+    };
+
+    chart.setOption(option, true);
+}
+
+function tooltipFormatter(p) {
+    if (p.dataType !== 'node') return '';
+    var d = p.data._orig || {};
+    return '<div style="max-width:260px;">'
+         + '<strong style="color:#f0883e;font-size:12px;">' + escapeHtml(d.name) + '</strong>'
+         + '<div style="color:#6e7681;margin-top:4px;font-size:10px;">标签: '
+         + ((d.categories||[]).join(', ') || '-') + '</div></div>';
+}
+
+/* ==================== 冻结布局 ==================== */
+
+function freezeLayout(retry) {
+    if (retry === undefined) retry = 0;
+    try {
+        var seriesModel = chart.getModel().getSeriesByIndex(0);
+        var data = seriesModel.getData();
+        var layout = data.getLayout('points');
+        if (!layout || layout.length < currentNodes.length * 2) {
+            if (retry < 5) setTimeout(function() { freezeLayout(retry + 1); }, 2000);
+            else showToast('布局冻结失败，请刷新页面', true);
+            return;
+        }
+        currentNodes.forEach(function(n, i) {
+            n.x = layout[i * 2];
+            n.y = layout[i * 2 + 1];
+        });
+        layoutFrozen = true;
+        renderGraph(null);
+        showToast('布局就绪');
+
+    } catch (e) {
+        if (retry < 5) setTimeout(function() { freezeLayout(retry + 1); }, 2000);
+        else showToast('布局冻结失败，请刷新页面', true);
+    }
+}
+
+/* ==================== 图渲染 ==================== */
+
+function renderGraph(searchResult) {
+    var matches = searchResult ? searchResult.matches : null;
+    var isSearchMode = !!matches;
+
+    var graphNodes = currentNodes.map(function(n) {
+        var cats = n.categories || [];
+        var baseColor = getTypeColor(cats);
+
+        var size = isSearchMode ? 6 : 18;
+        var opacity = isSearchMode ? 0.12 : 0.55;
+        var labelOpacity = isSearchMode ? 0.1 : 0.45;
+        var borderColor = 'transparent';
+        var shadowBlur = 0;
+        var shadowColor = 'transparent';
+        var borderWidth = 0;
+
+        if (isSearchMode && matches) {
+            var m = matches[n.id];
+            if (m && m.score > 0.3) {
+                // 搜索模式下的默认样式（后续会被动画覆盖）
+                size = 8;
+                opacity = 0.3;
+                var glow = getHeatGlow(m.score);
+                borderColor = baseColor;
+                borderWidth = glow.border;
+                shadowBlur = glow.blur / 3;
+                shadowColor = glow.color;
+            }
+        }
+
+        return {
+            id: n.id, name: n.name || '', symbolSize: size, category: cats[0] || '',
+            x: n.x, y: n.y,
+            itemStyle: { color: baseColor, opacity: opacity, borderWidth: borderWidth, borderColor: borderColor, shadowBlur: shadowBlur, shadowColor: shadowColor },
+            label: { show: true, formatter: truncate(n.name, 12), fontSize: 8, color: 'rgba(107,114,128,' + labelOpacity + ')', position: 'bottom', distance: 4 },
+            emphasis: { scale: 2.2, itemStyle: { shadowBlur: 30, shadowColor: 'rgba(255,255,255,0.9)', borderWidth: 3, borderColor: '#ffffff' } },
+            _orig: n
+        };
+    });
+
+    var graphEdges = currentEdges.map(function(e) {
+        return { source: e.source, target: e.target, lineStyle: { color: 'rgba(100,116,139,0.15)', width: 0.5 } };
+    });
+
+    var option = {
+        backgroundColor: 'transparent',
+        tooltip: { trigger: 'item', confine: true, enterable: false, formatter: tooltipFormatter },
+        series: [{
+            type: 'graph', layout: layoutFrozen ? 'none' : 'force',
+            animation: false, animationDurationUpdate: 200,
+            data: graphNodes, links: graphEdges,
+            roam: true, draggable: !isSearchMode && !layoutFrozen,
+            scaleLimit: { min: 0.05, max: 10 }, zoom: DEFAULT_ZOOM,
+            focusNodeAdjacency: false,
+            emphasis: { focus: 'none' },
+            categories: [
+                { name: 'Root', itemStyle: { color: '#ef4444' } },
+                { name: 'Abstract', itemStyle: { color: '#10b981' } },
+                { name: 'SubAbstract', itemStyle: { color: '#3b82f6' } },
+                { name: 'Fact', itemStyle: { color: '#a78bfa' } }
+            ]
+        }]
+    };
+
+    if (!layoutFrozen) {
+        option.series[0].force = { repulsion: 800, edgeLength: [150, 350], gravity: 0.05, friction: 0.6, layoutAnimation: false };
+    }
+
+    chart.setOption(option, true);
+}
+
+/* ==================== 🔥 热力蔓延核心 ==================== */
+
+/**
+ * 搜索后触发热力蔓延动画
+ *
+ * 流程:
+ *   1. 先将所有节点变为暗淡状态（size:6, opacity:0.12）
+ *   2. 按 score 排序，分 5 波扩散：
+ *      - 第1波(t=0ms): score >= 0.85 核心热点（最大最亮，白色发光）
+ *      - 第2波(t=300ms): score >= 0.75 强关联
+ *      - 第3波(t=650ms): score >= 0.6 中等关联
+ *      - 第4波(t=1050ms): score >= 0.45 弱关联
+ *      - 第5波(t=1500ms): 所有剩余匹配节点
+ *   3. 最后将最高匹配居中
+ */
+async function doSearch() {
+    var query = document.getElementById('search-input').value.trim();
+    if (!query) { showToast('请输入搜索关键词', true); return; }
+
+    showLoading(true, '检索中...');
+    try {
+        var res = await fetch(API_BASE + '/api/search', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ query: query, top_k: 50, include_neighbors: 1 })
+        });
+        var data = await res.json();
+        if (!res.ok) throw new Error(data.detail || '搜索失败');
+
+        showLoading(false);
+
+        var matches = data.topMatches || [];
+        var matchMap = {};
+        matches.forEach(function(m) { matchMap[m.nodeId] = m.score; });
+        currentMatches = matchMap;
+
+        showMatchList(matches);
+        document.getElementById('stat-matched').textContent = matches.length;
+
+        if (matches.length === 0) {
+            showToast('未找到匹配节点');
+            return;
+        }
+
+        // 开始热力蔓延！
+        startRippleReveal(matchMap, matches);
+
+    } catch (err) {
+        showLoading(false);
+        showToast('搜索失败: ' + err.message, true);
+        console.error(err);
+    }
+}
+
+function startRippleReveal(matchMap, rawMatches) {
+    var statusEl = document.getElementById('ripple-status');
+    var statusText = document.getElementById('ripple-text');
+    var barEl = document.getElementById('ripple-bar');
+
+    statusEl.classList.add('active');
+    statusText.textContent = '✨ 星空蔓延启动...';
+
+    // Step 2: 将匹配结果按分数排序（先排好，传给 dimAllNodes 做坐标重排）
+    var sorted = rawMatches.slice().sort(function(a, b) { return b.score - a.score; });
+
+    if (sorted.length === 0) {
+        statusText.textContent = '无匹配';
+        statusEl.classList.remove('active');
+        return;
+    }
+
+    // Step 1: 星空模式 + 坐标重排（匹配节点聚集到中心，背景星散布）
+    dimAllNodes(matchMap, sorted);
+
+    // Step 3: 切换为 none 布局，让自定义坐标生效，然后居中
+    statusText.textContent = '🎯 聚焦视野...';
+    
+    // 关键：必须切到 layout:'none' 才能使用自定义 x,y 坐标！
+    chart.setOption({
+        series: [{
+            layout: 'none',
+            force: null   // 清除 force 配置
+        }]
+    }, { lazyUpdate: false });
+
+    // 居中（此时所有节点已在坐标原点附近聚集）
+    setTimeout(function() {
+        // 因为节点已经聚集在原点附近，直接重置视图到中心即可
+        chart.dispatchAction({
+            type: 'graphRoam',
+            seriesIndex: 0,
+            dx: 0,
+            dy: 0
+        });
+        // 重置缩放到合适的比例
+        chart.setOption({
+            series: [{ zoom: DEFAULT_ZOOM }]
+        });
+        
+        setTimeout(function() { startWaves(sorted, statusEl, statusText, barEl); }, 200);
+    }, 100);
+}
+
+/**
+ * 分层逐颗亮起 — 按节点层级(Abstract→SubAbstract→Fact)从上往下
+ * 每一层内星星一颗接一颗亮起，像夜空中被逐一点亮
+ */
+function startWaves(sorted, statusEl, statusText, barEl) {
+
+    // 按层级分组
+    var layers = { 'Abstract': [], 'SubAbstract': [], 'Fact': [] };
+    var otherNodes = [];
+    sorted.forEach(function(m) {
+        var layer = getNodeType(m.nodeId);
+        if (layers[layer]) layers[layer].push(m);
+        else otherNodes.push(m);
+    });
+    layers['Fact'] = layers['Fact'].concat(otherNodes);
+
+    // 层级配置：视觉参数和时序
+    var LAYER_CONFIG = [
+        { type: 'Abstract',     name: '🌟 主星 · Abstract',  sizeRange: [32, 40], baseDelay: 0,       interval: [100, 160] },
+        { type: 'SubAbstract',  name: '✨ 繁星 · SubAbstract',sizeRange: [22, 30], baseDelay: 1200,    interval: [70, 130] },
+        { type: 'Fact',         name: '⭐ 微光 · Fact',      sizeRange: [14, 20], baseDelay: 2600,    interval: [50, 100] }
+    ];
+
+    var totalMatched = sorted.length;
+    var completedCount = 0;
+
+    LAYER_CONFIG.forEach(function(layerCfg, layerIdx) {
+        var nodesInLayer = layers[layerCfg.type] || [];
+        if (nodesInLayer.length === 0) {
+            setTimeout(function() {
+                statusText.textContent = layerCfg.name + ' (空)';
+                updateRippleBar(barEl, (layerIdx + 1) / LAYER_CONFIG.length * 90);
+            }, layerCfg.baseDelay);
+            return;
+        }
+
+        setTimeout(function() {
+            statusText.textContent = layerCfg.name + ' (' + nodesInLayer.length + '颗星)';
+            var minInt = layerCfg.interval[0];
+            var maxInt = layerCfg.interval[1];
+
+            nodesInLayer.forEach(function(m, idxInLayer) {
+                var delay = idxInLayer > 0 ? nodesInLayer.slice(0, idxInLayer).reduce(function(s, _) {
+                    return s + minInt + Math.random() * (maxInt - minInt);
+                }, 0) : 0;
+
+                setTimeout(function() {
+                    twinkleStar(m, layerCfg.sizeRange);
+                    highlightMatchItem(m.nodeId);
+                    completedCount++;
+                    updateRippleBar(barEl, completedCount / Math.max(totalMatched, 1) * 95);
+                    statusText.textContent = layerCfg.name + ' (' + (idxInLayer + 1) + '/' + nodesInLayer.length + ')';
+                }, delay);
+            });
+
+        }, layerCfg.baseDelay);
+    });
+
+    var factLen = (layers['Fact'] || []).length;
+    var totalTime = 2600 + factLen * 75 + 800;
+    setTimeout(function() {
+        statusText.textContent = '✨ 星空绽放完成';
+        statusEl.classList.remove('active');
+        updateRippleBar(barEl, 100);
+        moveToNode(sorted[0].nodeId);
+    }, totalTime);
+}
+
+/**
+ * 星空模式 — 智能节点筛选 + 坐标重排
+ *
+ * 策略：
+ *   1. 匹配节点：用黄金角螺旋均匀分散在视野中（像星星一样分布）
+ *   2. 未匹配节点：随机采样 STAR_BG_COUNT 颗作为密集背景星空
+ *   3. 其余节点：完全隐藏
+ *
+ * 坐标系统：ECharts 图坐标系以 (0,0) 为中心
+ */
+function dimAllNodes(matchMap, sortedMatches) {
+    try {
+        var currentData = chart.getOption().series[0].data;
+        if (!currentData || !currentData.length) return;
+
+        // === 收集节点分类 ===
+        var matchedIdx = [];    // 匹配节点的 data 索引
+        var unmatchedIdx = [];   // 未匹配节点的 data 索引
+
+        currentData.forEach(function(d, i) {
+            if (matchMap && matchMap[d.id]) {
+                matchedIdx.push(i);
+            } else {
+                unmatchedIdx.push(i);
+            }
+        });
+
+        // === 为每个匹配节点计算新坐标（黄金角螺旋均匀分散） ===
+        // 黄金角度 ≈ 137.508°，确保每颗星的间距最大化
+        var GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5)); // ≈ 2.39996 rad ≈ 137.5°
+
+        // 构建匹配节点的位置映射：idx → {x, y}
+        var matchPositions = {};
+        var matchCount = matchedIdx.length;
+
+        // 按分数排序后分配位置
+        var matchedWithScores = [];
+        matchedIdx.forEach(function(i) {
+            var score = matchMap[currentData[i].id] || 0;
+            matchedWithScores.push({ idx: i, score: score });
+        });
+        matchedWithScores.sort(function(a, b) { return b.score - a.score; });
+
+        matchedWithScores.forEach(function(item, rank) {
+            // 分数越高越接近中心（但保持足够间距）
+            // 半径随排名递增，但用 sqrt 让内圈不会太挤
+            var normalizedRank = matchCount > 1 ? rank / (matchCount - 1) : 0;
+            // 内圈 15% ~ 外圈 95% 的 CLUSTER_RADIUS
+            var r = CLUSTER_RADIUS * (0.15 + 0.8 * Math.sqrt(normalizedRank));
+
+            // 黄金角螺旋 — 每颗星旋转固定角度，自然形成均匀分布
+            var angle = rank * GOLDEN_ANGLE;
+
+            matchPositions[item.idx] = {
+                x: Math.cos(angle) * r,
+                y: Math.sin(angle) * r
+            };
+        });
+
+        // === 随机采样背景星（Fisher-Yates 洗牌） ===
+        var bgSet = {};
+        var shuffled = unmatchedIdx.slice();
+        for (var i = shuffled.length - 1; i > 0; i--) {
+            var j = Math.floor(Math.random() * (i + 1));
+            var tmp = shuffled[i]; shuffled[i] = shuffled[j]; shuffled[j] = tmp;
+        }
+        for (var s = 0; s < Math.min(STAR_BG_COUNT, shuffled.length); s++) {
+            bgSet[shuffled[s]] = true;
+        }
+
+        // 背景星用多层环形 + 随机扰动，模拟真实银河系密度分布
+        var bgPositionCache = {};
+        var bgKeys = Object.keys(bgSet);
+        bgKeys.forEach(function(k, idx) {
+            var idxNum = parseInt(k);
+
+            // 多层环：内圈稀疏、中圈密、外圈渐稀（模拟银河盘面）
+            var layerRatio = idx / Math.max(bgKeys.length - 1, 1);
+            // 核心区域(30%)较密，边缘渐稀
+            var densityR = BG_SPREAD * Math.pow(layerRatio, 0.7);  // 用幂函数让中心更密
+
+            // 添加随机偏移避免完美圆环感
+            var bAngle = idx * GOLDEN_ANGLE * 0.618 + Math.random() * 0.8;
+            var br = densityR + (Math.random() - 0.5) * BG_SPREAD * 0.08;
+
+            bgPositionCache[idxNum] = {
+                x: Math.cos(bAngle) * br,
+                y: Math.sin(bAngle) * br
+            };
+        });
+
+        // === 构建最终数据 ===
+        var dimmed = currentData.map(function(d, i) {
+            var isMatched = !!matchPositions[i];
+            var isBgStar = !!bgSet[i];
+
+            // 确定坐标
+            var newPos;
+            if (isMatched) {
+                newPos = matchPositions[i];
+            } else if (isBgStar) {
+                newPos = bgPositionCache[i];
+            }
+
+            if (isMatched) {
+                // 匹配节点：暗淡星点状态，等待波次亮起
+                // 像一颗微弱的星星，等待被点亮
+                return Object.assign({}, d, {
+                    x: newPos.x, y: newPos.y,
+                    symbolSize: 4 + Math.random() * 2,   // 小巧的星点
+                    itemStyle: {
+                        color: '#8899aa',
+                        opacity: 0.25,
+                        borderWidth: 0,
+                        borderColor: 'transparent',
+                        shadowBlur: 1.5,
+                        shadowColor: 'rgba(136,153,170,0.15)'
+                    },
+                    label: Object.assign({}, d.label, { show: false })
+                });
+            } else if (isBgStar) {
+                // 背景星空：更亮更多样化的星点
+                // 模拟真实星空的亮度差异（大部分暗淡，少数明亮）
+                var brightness = Math.random();
+                var starSize, starOpacity, starColor;
+
+                if (brightness > 0.97) {
+                    // 偶尔出现的亮星（像天狼星一样醒目）
+                    starSize = 2.5 + Math.random() * 2;
+                    starOpacity = 0.45 + Math.random() * 0.25;
+                    starColor = '#aaccff';  // 偏蓝白
+                } else if (brightness > 0.85) {
+                    // 中等亮度星
+                    starSize = 1.5 + Math.random() * 1.5;
+                    starOpacity = 0.25 + Math.random() * 0.2;
+                    starColor = '#8899bb';
+                } else {
+                    // 大量暗弱星（构成星空底色）
+                    starSize = 0.6 + Math.random() * 1.2;
+                    starOpacity = 0.12 + Math.random() * 0.12;
+                    starColor = '#556677';
+                }
+
+                return Object.assign({}, d, {
+                    x: newPos.x, y: newPos.y,
+                    symbolSize: starSize,
+                    itemStyle: {
+                        color: starColor,
+                        opacity: starOpacity,
+                        borderWidth: 0,
+                        borderColor: 'transparent',
+                        shadowBlur: starSize > 2 ? 3 : 0,
+                        shadowColor: starSize > 2 ? 'rgba(170,204,255,0.25)' : 'transparent'
+                    },
+                    label: Object.assign({}, d.label, { show: false })
+                });
+            } else {
+                // 完全隐藏的节点
+                return Object.assign({}, d, {
+                    symbolSize: 0.05,
+                    itemStyle: {
+                        color: 'transparent',
+                        opacity: 0,
+                        borderWidth: 0,
+                        borderColor: 'transparent',
+                        shadowBlur: 0,
+                        shadowColor: 'transparent'
+                    },
+                    label: Object.assign({}, d.label, { show: false })
+                });
+            }
+        });
+
+        chart.setOption({
+            series: [{ data: dimmed }]
+        }, { lazyUpdate: false });
+
+    } catch(e) {
+        console.warn('dimAllNodes error:', e);
+    }
+}
+
+/**
+ * 获取节点的类型（用于分层亮起顺序）
+ */
+function getNodeType(nodeId) {
+    var n = currentNodes[nodeIdMap[nodeId]];
+    if (!n) return null;
+    var cats = n.categories || [];
+    for (var i = 0; i < cats.length; i++) {
+        if (cats[i] === 'Root') return 'Root';
+        if (cats[i] === 'Abstract') return 'Abstract';
+        if (cats[i] === 'SubAbstract') return 'SubAbstract';
+        if (cats[i] === 'Fact') return 'Fact';
+    }
+    return cats[0] || null;
+}
+
+/**
+ * 单颗星闪烁亮起 — 只操作一个节点，产生"突然点亮"的视觉效果
+ */
+function twinkleStar(m, sizeRange) {
+    try {
+        var currentData = chart.getOption().series[0].data;
+        if (!currentData || !currentData.length) return;
+
+        var targetIdx = -1;
+        for (var i = 0; i < currentData.length; i++) {
+            if (currentData[i].id === m.nodeId) { targetIdx = i; break; }
+        }
+        if (targetIdx < 0) return;
+
+        var targetSize = sizeRange[0] + Math.random() * (sizeRange[1] - sizeRange[0]);
+        var glow = getHeatGlow(m.score);
+        var heatColor = getHeatColor(m.score);
+
+        var updated = currentData.slice();
+        updated[targetIdx] = Object.assign({}, currentData[targetIdx], {
+            symbolSize: targetSize,
+            itemStyle: {
+                color: heatColor,
+                opacity: 0.96,
+                borderWidth: glow.border,
+                borderColor: heatColor,
+                shadowBlur: glow.blur,
+                shadowColor: glow.color
+            },
+            label: Object.assign({}, currentData[targetIdx].label || {}, {
+                show: true,
+                color: 'rgba(230,237,243,0.92)',
+                fontSize: targetSize > 25 ? 10 : 8
+            })
+        });
+
+        chart.setOption({
+            series: [{ data: updated }]
+        }, { lazyUpdate: false });
+
+    } catch(e) {
+        console.warn('twinkleStar error:', e);
+    }
+}
+
+function updateRippleBar(barEl, pct) {
+    if (barEl) barEl.style.width = pct + '%';
+}
+
+function highlightMatchItem(nodeId) {
+    var items = document.querySelectorAll('.match-item[data-node-id="' + nodeId + '"]');
+    items.forEach(function(el) {
+        el.classList.add('revealing');
+        setTimeout(function() { el.classList.remove('revealing'); }, 600);
+    });
+}
+
+/* ==================== 轻量级高亮（非动画场景） ==================== */
+
+function applyHighlights(matches) {
+    if (!chart) return;
+    var currentData = chart.getOption().series[0].data;
+    var updatedNodes = currentData.map(function(nodeData) {
+        var n = nodeData._orig || {};
+        var cats = n.categories || [];
+        var baseColor = getTypeColor(cats);
+        var size = 18, bw = 0, bc = 'transparent', sb = 0, sc = 'transparent';
+
+        if (matches) {
+            var m = matches[nodeData.id];
+            if (m && m.score > 0.5) {
+                size = 34; bw = 4; bc = '#ffffff'; sb = 30; sc = 'rgba(255,255,255,0.9)';
+            }
+        }
+        return Object.assign({}, nodeData, {
+            symbolSize: size,
+            itemStyle: { color: baseColor, borderWidth: bw, borderColor: bc, shadowBlur: sb, shadowColor: sc },
+            _orig: n
+        });
+    });
+    chart.setOption({ series: [{ data: updatedNodes }] }, { lazyUpdate: false });
+}
+
+/* ==================== 居中 ==================== */
+
+function moveToNode(nodeId) {
+    if (!chart || !currentNodes.length) return;
+    var idx = nodeIdMap[nodeId];
+    if (idx === undefined || idx === null) return;
+    console.log('🎯 移动到:', currentNodes[idx].name);
+    _tryPanCenter(idx, 0);
+}
+
+function _tryPanCenter(idx, attempt) {
+    var MAX = 20, DELAY = 400;
+    try {
+        var container = document.getElementById('graph-container');
+        var cx = container.clientWidth / 2, cy = container.clientHeight / 2;
+
+        var pts = null;
+        try {
+            var sm = chart.getModel().getSeriesByIndex(0);
+            pts = sm.getData().getLayout('points');
+        } catch(e) {}
+
+        var nx = null, ny = null;
+        if (pts && pts.length > idx * 2 + 1) { nx = pts[idx * 2]; ny = pts[idx * 2 + 1]; }
+
+        if (nx == null || isNaN(nx)) {
+            try {
+                var od = chart.getOption().series[0].data;
+                if (od && od[idx]) { nx = od[idx].x; ny = od[idx].y; }
+            } catch(e) {}
+        }
+
+        if (nx == null || isNaN(nx)) throw new Error('无坐标');
+
+        var pixel = chart.convertToPixel({ seriesIndex: 0 }, [nx, ny]);
+        if (!pixel || isNaN(pixel[0])) throw new Error('转换失败');
+
+        var dx = Math.round(cx - pixel[0]), dy = Math.round(cy - pixel[1]);
+        if (Math.abs(dx) < 3 && Math.abs(dy) < 3) {
+            setTimeout(function() {
+                try { chart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: idx }); } catch(e) {}
+            }, 200);
+            return;
+        }
+
+        chart.dispatchAction({ type: 'graphRoam', seriesIndex: 0, dx: dx, dy: dy });
+        setTimeout(function() {
+            try { chart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: idx }); } catch(e) {}
+        }, 300);
+
+    } catch (e) {
+        if (attempt < MAX) setTimeout(function() { _tryPanCenter(idx, attempt + 1); }, DELAY);
+        else try { chart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: idx }); } catch(ex) {}
+    }
+}
+
+/* ==================== 匹配列表 ==================== */
+
+function showMatchList(matches) {
+    var list = document.getElementById('matches-list');
+    if (!matches || !matches.length) {
+        list.innerHTML = '<div class="empty-matches">未找到匹配节点</div>';
+        return;
+    }
+    var maxS = Math.max.apply(null, matches.map(function(m){return m.score;}));
+    list.innerHTML = matches.map(function(m) {
+        var pct = Math.round(m.score / maxS * 100), isHi = m.score > 0.5;
+        var c = isHi ? '#f0883e' : '#58a6ff';
+        return '<div class="match-item'+(isHi?' highlighted':'')+'" data-node-id="'+escapeAttr(m.nodeId)+'" style="border-left-color:'+c+'">'
+             + '<div class="match-score" style="background:'+c+'">'+pct+'</div>'
+             + '<div class="match-info">'
+             + '<div class="match-name" title="'+escapeAttr(m.text)+'">'+escapeHtml(m.text)+'</div>'
+             + '<div class="match-desc">' + m.score.toFixed(3) + '</div></div></div>';
+    }).join('');
+
+    list.querySelectorAll('.match-item').forEach(function(item) {
+        item.addEventListener('click', function() {
+            var nid = this.getAttribute('data-node-id');
+            if (nid) moveToNode(nid);
+        });
+    });
+}
+
+/* ==================== 清除/重置 ==================== */
+
+function clearHighlight() {
+    if (!chart) return;
+    currentMatches = null;
+    document.getElementById('ripple-status').classList.remove('active');
+
+    // 恢复力布局 + 所有节点正常展示
+    try {
+        // 先切回 force 模式
+        chart.setOption({
+            series: [{
+                layout: 'force',
+                force: { repulsion: 800, edgeLength: [150, 350], gravity: 0.05, friction: 0.6, layoutAnimation: false },
+                zoom: DEFAULT_ZOOM
+            }]
+        }, { lazyUpdate: false });
+
+        // 用原始坐标恢复所有节点
+        var restored = currentNodes.map(function(n) {
+            var cats = n.categories || [];
+            var baseColor = getTypeColor(cats);
+            return {
+                id: n.id, name: n.name || '',
+                symbolSize: 18,
+                category: cats[0] || '',
+                x: n.x, y: n.y,
+                itemStyle: {
+                    color: baseColor,
+                    opacity: 0.55,
+                    borderWidth: 0,
+                    borderColor: 'transparent',
+                    shadowBlur: 0,
+                    shadowColor: 'transparent'
+                },
+                label: { show: true, formatter: truncate(n.name, 12), fontSize: 8, color: 'rgba(107,114,128,0.45)', position: 'bottom', distance: 4 },
+                emphasis: { scale: 2, itemStyle: { shadowBlur: 25, shadowColor: 'rgba(255,255,255,0.8)', borderWidth: 3, borderColor: '#ffffff' } },
+                _orig: n
+            };
+        });
+
+        var restoredEdges = currentEdges.map(function(e) {
+            return { source: e.source, target: e.target, lineStyle: { color: 'rgba(100,116,139,0.2)', width: 0.5 } };
+        });
+
+        chart.setOption({
+            series: [{ data: restored, links: restoredEdges }]
+        }, { lazyUpdate: false });
+    } catch(e) {
+        console.warn('clearHighlight error:', e);
+    }
+
+    document.getElementById('stat-matched').textContent = '0';
+    document.getElementById('matches-list').innerHTML =
+        '<div class="empty-matches">输入关键词开始检索<br>✨ 匹配结果将以星空蔓延动画展示</div>';
+}
+
+function resetView() {
+    clearHighlight();
+    if (chart) chart.setOption({ series: [{ center: undefined, zoom: DEFAULT_ZOOM }] });
+}
+
+/* ==================== 辅助 ==================== */
+
+async function runDiagnose() {
+    showLoading(true, '诊断数据库...');
+    try {
+        var r = await fetch(API_BASE + '/api/diagnose');
+        var d = await r.json(); showLoading(false);
+        var diag = d.diagnostics, s = 'Neo4j 诊断\n' + '-'.repeat(26) + '\n\n';
+        if (diag.labelDistribution && diag.labelDistribution.length) {
+            diag.labelDistribution.forEach(function(l) { s += '  • ' + l.label + ': ' + l.count + '\n'; });
+        }
+        alert(s);
+    } catch (e) { showLoading(false); showToast('诊断失败: ' + e.message, true); }
+}
+
+function toggleConfig() {
+    var el = document.getElementById('config-content');
+    el.classList.toggle('open');
+    document.getElementById('config-arrow').textContent = el.classList.contains('open') ? '▲' : '▼';
+}
+
+async function saveNeo4jConfig() {
+    var uri = document.getElementById('neo4j-uri').value;
+    var user = document.getElementById('neo4j-user').value;
+    var pwd = document.getElementById('neo4j-password').value;
+    showLoading(true, '连接 Neo4j...');
+    try {
+        var res = await fetch(API_BASE + '/api/config/neo4j', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ uri: uri, user: user, password: pwd, database: 'neo4j' })
+        });
+        var dd = await res.json();
+        if (!res.ok) throw Error(dd.detail || '连接失败');
+        showLoading(false); showToast('连接成功'); loadGraphData();
+    } catch (e) { showLoading(false); showToast('连接失败: ' + e.message, true); }
+}
+
+function showLoading(show, text) {
+    var el = document.getElementById('loading');
+    document.getElementById('loading-text').textContent = text || '加载中...';
+    el.classList.toggle('show', show);
+}
+
+function showToast(msg, isError) {
+    var el = document.getElementById('toast');
+    el.textContent = msg; el.className = 'toast' + (isError ? ' error' : '') + ' show';
+    setTimeout(function() { el.classList.remove('show'); }, 2800);
+}
+function escapeHtml(t) { var d = document.createElement('div'); d.textContent = t || ''; return d.innerHTML; }
+function escapeAttr(t) {
+    var d = document.createElement('div'); d.textContent = t || '';
+    return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+</script>
+</body>
+</html>
